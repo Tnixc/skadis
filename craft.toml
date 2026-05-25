@@ -1,0 +1,13 @@
+[project]
+name = "skadis"
+version = "0.1.0"
+language = "cpp"
+cpp_standard = 23
+
+[build]
+type = "executable"
+include_dirs = ["include"]
+source_dirs = ["src"]
+
+[dependencies]
+json_struct = { git = "https://github.com/jorgen/json_struct", links = ["json_struct"] }
