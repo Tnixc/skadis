@@ -78,6 +78,19 @@ struct Config {
 
     return {};
   }
+
+  expected<Config, string> load() {
+
+    auto home = std::getenv("HOME");
+    auto config_path =
+        std::filesystem::path(home).append(".config").append("skadis").append(
+            "config.json");
+
+    if (!std::filesystem::exists(config_path)) {
+      return unexpected("The config file doesn't exist: " +
+                        config_path.generic_string());
+    }
+  }
 };
 
 expected<Config, string> to_config(const RawConfig &raw_config) {
