@@ -10,7 +10,10 @@
 #include <vector>
 namespace skadis {
 
-enum class Source { Notion, Reminders };
+enum class Source {
+  Notion,
+  Reminders
+};
 
 struct NotionId {
   std::string value;

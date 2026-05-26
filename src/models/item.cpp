@@ -29,7 +29,9 @@ struct DateTimeParts {
   int offset_seconds{};
 };
 
-inline bool is_digit(char c) { return c >= '0' && c <= '9'; }
+inline bool is_digit(char c) {
+  return c >= '0' && c <= '9';
+}
 
 inline std::optional<int> parse_fixed_int(std::string_view input, size_t pos,
                                           size_t digits) {
@@ -54,7 +56,18 @@ inline bool is_leap_year(int year) {
 
 inline int days_in_month(int year, int month) {
   static constexpr std::array<int, 12> month_lengths = {
-      31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+      31,
+      28,
+      31,
+      30,
+      31,
+      30,
+      31,
+      31,
+      30,
+      31,
+      30,
+      31,
   };
   if (month == 2 && is_leap_year(year)) {
     return 29;

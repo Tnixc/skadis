@@ -410,7 +410,7 @@ query_pages(const std::filesystem::path &ntn_path,
 
   while (true) {
     std::vector<std::string> argv = {ntn_path.string(), "datasources", "query",
-                                     data_source_id,    "--limit",     "100",
+                                     data_source_id, "--limit", "100",
                                      "--json"};
     if (cursor) {
       argv.push_back("--start-cursor=" + *cursor);
