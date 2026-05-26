@@ -49,9 +49,9 @@ inline std::expected<T, std::string> parse_json(const std::string &input) {
 inline std::expected<std::vector<ReminderRecord>, std::string>
 list_items(const std::filesystem::path &reminders_path,
            const std::string &list_name) {
-  auto out = process::run_capture_stdout(
-      {reminders_path.string(), "show", list_name, "--include-completed",
-       "--format", "json"});
+  auto out =
+      process::run_capture_stdout({reminders_path.string(), "show", list_name,
+                                   "--include-completed", "--format", "json"});
   if (!out) {
     return std::unexpected(out.error());
   }
@@ -82,8 +82,8 @@ inline std::expected<std::string, std::string>
 add(const std::filesystem::path &reminders_path, const std::string &list_name,
     const std::string &title, const std::optional<std::string> &notes,
     const std::optional<std::string> &due_iso, bool completed) {
-  std::vector<std::string> argv = {reminders_path.string(), "add", list_name,
-                                   title, "--format", "json"};
+  std::vector<std::string> argv = {
+      reminders_path.string(), "add", list_name, title, "--format", "json"};
   if (notes && !notes->empty()) {
     argv.push_back("--notes");
     argv.push_back(*notes);

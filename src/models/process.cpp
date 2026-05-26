@@ -133,8 +133,7 @@ run_capture(const std::vector<std::string> &argv,
         ssize_t n = ::read(fds[i].fd, buf, sizeof(buf));
         if (n > 0) {
           (i == 0 ? out : err).append(buf, static_cast<size_t>(n));
-        } else if (n == 0 ||
-                   (n < 0 && errno != EINTR && errno != EAGAIN)) {
+        } else if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) {
           ::close(fds[i].fd);
           fds[i].fd = -1;
           --open_count;
@@ -152,10 +151,9 @@ run_capture(const std::vector<std::string> &argv,
     }
   }
 
-  int exit_code = WIFEXITED(status) ? WEXITSTATUS(status)
-                  : WIFSIGNALED(status)
-                      ? 128 + WTERMSIG(status)
-                      : -1;
+  int exit_code = WIFEXITED(status)     ? WEXITSTATUS(status)
+                  : WIFSIGNALED(status) ? 128 + WTERMSIG(status)
+                                        : -1;
 
   return CaptureResult{
       .stdout_data = std::move(out),
@@ -180,8 +178,8 @@ run_capture_stdout(const std::vector<std::string> &argv,
       command += a;
     }
     return std::unexpected("Command failed (exit " +
-                           std::to_string(result->exit_code) +
-                           "): " + command + "\n" + result->stderr_data);
+                           std::to_string(result->exit_code) + "): " + command +
+                           "\n" + result->stderr_data);
   }
   return std::move(result->stdout_data);
 }

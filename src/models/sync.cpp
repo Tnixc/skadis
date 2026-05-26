@@ -215,17 +215,15 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
     }
     case Op::Kind::UpdateReminder: {
       if (op.current.due_iso != op.desired.due_iso) {
-        auto del = reminders::remove(reminders_path,
-                                     plan.ctx.reminders_list_name,
-                                     op.target_id);
+        auto del = reminders::remove(
+            reminders_path, plan.ctx.reminders_list_name, op.target_id);
         if (!del) {
           return std::unexpected("delete-for-recreate failed: " + del.error());
         }
         drop_link_for_reminders_id(new_state, op.target_id);
-        auto eid =
-            reminders::add(reminders_path, plan.ctx.reminders_list_name,
-                           op.desired.title, op.desired.notes,
-                           op.desired.due_iso, op.desired.done);
+        auto eid = reminders::add(reminders_path, plan.ctx.reminders_list_name,
+                                  op.desired.title, op.desired.notes,
+                                  op.desired.due_iso, op.desired.done);
         if (!eid) {
           return std::unexpected("recreate reminder failed: " + eid.error());
         }
@@ -240,22 +238,20 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
           notes_arg = op.desired.notes;
         }
         if (title_arg || notes_arg) {
-          auto e = reminders::edit(reminders_path,
-                                   plan.ctx.reminders_list_name, op.target_id,
-                                   title_arg, notes_arg);
+          auto e = reminders::edit(reminders_path, plan.ctx.reminders_list_name,
+                                   op.target_id, title_arg, notes_arg);
           if (!e) {
             return std::unexpected("edit reminder failed: " + e.error());
           }
         }
         if (op.current.done != op.desired.done) {
-          auto e =
-              op.desired.done
-                  ? reminders::complete(reminders_path,
-                                        plan.ctx.reminders_list_name,
-                                        op.target_id)
-                  : reminders::uncomplete(reminders_path,
-                                          plan.ctx.reminders_list_name,
-                                          op.target_id);
+          auto e = op.desired.done
+                       ? reminders::complete(reminders_path,
+                                             plan.ctx.reminders_list_name,
+                                             op.target_id)
+                       : reminders::uncomplete(reminders_path,
+                                               plan.ctx.reminders_list_name,
+                                               op.target_id);
           if (!e) {
             return std::unexpected("complete/uncomplete failed: " + e.error());
           }

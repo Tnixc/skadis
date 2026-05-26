@@ -16,8 +16,7 @@ struct NotionExtras {
   std::optional<std::string> raw_status;
 };
 
-inline std::optional<std::string>
-normalize_iso_utc(const std::string &iso) {
+inline std::optional<std::string> normalize_iso_utc(const std::string &iso) {
   if (iso.empty()) {
     return std::nullopt;
   }
@@ -34,9 +33,8 @@ normalize_iso_utc(const std::string &iso) {
   int tz_m = 0;
   bool parsed = false;
 
-  int n = std::sscanf(iso.c_str(),
-                      "%4d-%2d-%2dT%2d:%2d:%2d.%3d%c%2d:%2d", &y, &mo, &d,
-                      &h, &mi, &s, &ms, &tz_sign, &tz_h, &tz_m);
+  int n = std::sscanf(iso.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d.%3d%c%2d:%2d", &y,
+                      &mo, &d, &h, &mi, &s, &ms, &tz_sign, &tz_h, &tz_m);
   if (n == 10 && (tz_sign == '+' || tz_sign == '-')) {
     parsed = true;
   }

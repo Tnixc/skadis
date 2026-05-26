@@ -101,6 +101,11 @@ struct PageCreateResponse {
   JS_OBJECT(JS_MEMBER(id), JS_MEMBER(page));
 };
 
+struct DatabaseResponse {
+  std::vector<TitleText> title;
+  JS_OBJECT(JS_MEMBER(title));
+};
+
 template <typename T>
 inline std::expected<T, std::string> parse_json(const std::string &input) {
   T out{};
@@ -168,6 +173,26 @@ inline std::string build_content(const FrontmatterFields &fields,
 }
 
 inline std::expected<std::string, std::string>
+get_database_title(const std::filesystem::path &ntn_path,
+                   const std::string &database_id) {
+  auto out = process::run_capture_stdout(
+      {ntn_path.string(), "api", "v1/databases/" + database_id});
+  if (!out) {
+    return std::unexpected(out.error());
+  }
+  auto parsed = raw::parse_json<raw::DatabaseResponse>(*out);
+  if (!parsed) {
+    return std::unexpected("Failed to parse `ntn api v1/databases` JSON: " +
+                           parsed.error());
+  }
+  std::string title;
+  for (const auto &chunk : parsed->title) {
+    title += chunk.plain_text;
+  }
+  return title;
+}
+
+inline std::expected<std::string, std::string>
 resolve_data_source(const std::filesystem::path &ntn_path,
                     const std::string &database_id) {
   auto out = process::run_capture_stdout(
@@ -212,9 +237,9 @@ query_pages(const std::filesystem::path &ntn_path,
   std::optional<std::string> cursor;
 
   while (true) {
-    std::vector<std::string> argv = {
-        ntn_path.string(), "datasources", "query", data_source_id,
-        "--limit",         "100",         "--json"};
+    std::vector<std::string> argv = {ntn_path.string(), "datasources", "query",
+                                     data_source_id,    "--limit",     "100",
+                                     "--json"};
     if (cursor) {
       argv.push_back("--start-cursor");
       argv.push_back(*cursor);
@@ -225,8 +250,8 @@ query_pages(const std::filesystem::path &ntn_path,
     }
     auto parsed = raw::parse_json<raw::QueryResponse>(*out);
     if (!parsed) {
-      return std::unexpected(
-          "Failed to parse `ntn datasources query` JSON: " + parsed.error());
+      return std::unexpected("Failed to parse `ntn datasources query` JSON: " +
+                             parsed.error());
     }
 
     for (auto &page : parsed->results) {
@@ -246,8 +271,7 @@ query_pages(const std::filesystem::path &ntn_path,
 
       if (page.properties.status_prop.status) {
         record.extras.raw_status = page.properties.status_prop.status->name;
-        record.item.done =
-            page.properties.status_prop.status->name == "Done";
+        record.item.done = page.properties.status_prop.status->name == "Done";
       } else {
         record.item.done = false;
       }

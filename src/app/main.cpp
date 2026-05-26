@@ -1,9 +1,14 @@
 #include "../models/config.cpp"
+
 #include "../models/process.cpp"
+
 #include "../models/item.cpp"
+
 #include "../models/notion.cpp"
 #include "../models/reminders.cpp"
+
 #include "../models/state.cpp"
+
 #include "../models/sync.cpp"
 
 #include <print>
@@ -68,11 +73,19 @@ int run_sync(const skadis::Config &config, bool dry_run) {
     const auto key =
         skadis::state::pair_key(notion_database_id, reminders_list);
 
-    std::println("\n== {} <-> {} ==", notion_database_id, reminders_list);
+    auto db_title =
+        skadis::notion::get_database_title(config.ntn_path, notion_database_id);
+    if (db_title) {
+      std::println("\n== {} ({}) <-> {} ==", *db_title, notion_database_id,
+                   reminders_list);
+    } else {
+      std::println("\n== {} <-> {} ==", notion_database_id, reminders_list);
+      std::println(stderr, "  warning: could not fetch database title: {}",
+                   db_title.error());
+    }
 
-    auto data_source_id =
-        skadis::notion::resolve_data_source(config.ntn_path,
-                                            notion_database_id);
+    auto data_source_id = skadis::notion::resolve_data_source(
+        config.ntn_path, notion_database_id);
     if (!data_source_id) {
       std::println(stderr, "  resolve failed: {}", data_source_id.error());
       any_failed = true;
@@ -82,8 +95,7 @@ int run_sync(const skadis::Config &config, bool dry_run) {
     auto notion_records =
         skadis::notion::query_pages(config.ntn_path, *data_source_id);
     if (!notion_records) {
-      std::println(stderr, "  notion query failed: {}",
-                   notion_records.error());
+      std::println(stderr, "  notion query failed: {}", notion_records.error());
       any_failed = true;
       continue;
     }
@@ -106,13 +118,13 @@ int run_sync(const skadis::Config &config, bool dry_run) {
 
     const auto pair_state_it = state->pairs.find(key);
     const skadis::state::PairState empty_state{};
-    const auto &pair_state =
-        pair_state_it != state->pairs.end() ? pair_state_it->second
-                                            : empty_state;
+    const auto &pair_state = pair_state_it != state->pairs.end()
+                                 ? pair_state_it->second
+                                 : empty_state;
 
-    auto plan = skadis::sync::plan_pair(
-        ctx, pair_state, std::span(*notion_records),
-        std::span(*reminders_records));
+    auto plan =
+        skadis::sync::plan_pair(ctx, pair_state, std::span(*notion_records),
+                                std::span(*reminders_records));
 
     std::print("{}", skadis::sync::render_plan(plan));
 
