@@ -1,8 +1,10 @@
 #include <print>
-#include "models/config.cpp"
+#include "../models/config.cpp"
 
 int main() {
+
   const auto config = skadis::Config::load();
+
   if (!config) {
     std::println("{}", config.error());
     return 1;

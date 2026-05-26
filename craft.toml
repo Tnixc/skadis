@@ -7,7 +7,7 @@ cpp_standard = 23
 [build]
 type = "executable"
 include_dirs = ["include"]
-source_dirs = ["src"]
+source_dirs = ["src/app"]
 
 [dependencies]
 json_struct = { git = "https://github.com/jorgen/json_struct", links = ["json_struct"] }

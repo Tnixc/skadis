@@ -59,9 +59,10 @@ struct RawPair {
   std::string notion_id;
   std::string reminders_list;
 
-  JS_OBJECT(JS_MEMBER_WITH_NAME_AND_ALIASES(notion_id, "notion_id", "notion"),
-            JS_MEMBER_WITH_NAME_AND_ALIASES(reminders_list, "reminders_list",
-                                            "reminders"));
+  JS_OBJECT(
+      JS_MEMBER_WITH_NAME_AND_ALIASES(notion_id, "notion_id", "notion"),
+      JS_MEMBER_WITH_NAME_AND_ALIASES(reminders_list, "reminders_list",
+                                      "reminders", "reminders_list_name"));
 };
 
 struct RawConfig {
@@ -70,7 +71,10 @@ struct RawConfig {
   std::string reminders_path;
   std::vector<RawPair> pairs;
 
-  JS_OBJ(source, ntn_path, reminders_path, pairs);
+  JS_OBJECT(JS_MEMBER_WITH_NAME_AND_ALIASES(source, "source", "source_of_truth"),
+            JS_MEMBER_WITH_NAME(ntn_path, "ntn_path"),
+            JS_MEMBER_WITH_NAME(reminders_path, "reminders_path"),
+            JS_MEMBER_WITH_NAME_AND_ALIASES(pairs, "pairs", "lists"));
 };
 
 inline std::expected<Config, std::string>
