@@ -65,7 +65,6 @@ int run_sync(const skadis::Config &config, bool dry_run) {
   }
 
   bool any_failed = false;
-  bool state_dirty = false;
 
   for (const auto &pair : config.pairs) {
     const auto &notion_database_id = pair.first.value;
@@ -92,6 +91,13 @@ int run_sync(const skadis::Config &config, bool dry_run) {
       continue;
     }
 
+    auto schema = skadis::notion::load_schema(config.ntn_path, *data_source_id);
+    if (!schema) {
+      std::println(stderr, "  schema validation failed: {}", schema.error());
+      any_failed = true;
+      continue;
+    }
+
     auto notion_records =
         skadis::notion::query_pages(config.ntn_path, *data_source_id);
     if (!notion_records) {
@@ -114,6 +120,8 @@ int run_sync(const skadis::Config &config, bool dry_run) {
         .notion_database_id = notion_database_id,
         .data_source_id = *data_source_id,
         .reminders_list_name = reminders_list,
+        .notion_done_status_name = schema->done_status_name,
+        .notion_not_done_status_name = schema->not_done_status_name,
     };
 
     const auto pair_state_it = state->pairs.find(key);
@@ -125,33 +133,33 @@ int run_sync(const skadis::Config &config, bool dry_run) {
     auto plan =
         skadis::sync::plan_pair(ctx, pair_state, std::span(*notion_records),
                                 std::span(*reminders_records));
+    if (!plan) {
+      std::println(stderr, "  plan failed: {}", plan.error());
+      any_failed = true;
+      continue;
+    }
 
-    std::print("{}", skadis::sync::render_plan(plan));
+    std::print("{}", skadis::sync::render_plan(*plan));
 
     if (dry_run) {
       continue;
     }
-    if (plan.ops.empty()) {
-      state->pairs[key] = {.links = plan.matched_links};
-      state_dirty = true;
-      continue;
+    if (plan->ops.empty()) {
+      state->pairs[key] = {.links = plan->matched_links};
+    } else {
+      auto applied = skadis::sync::apply_plan(*plan, config.ntn_path,
+                                              config.reminders_path);
+      if (!applied) {
+        std::println(stderr, "  apply failed: {}", applied.error());
+        any_failed = true;
+        continue;
+      }
+      state->pairs[key] = std::move(*applied);
     }
 
-    auto applied =
-        skadis::sync::apply_plan(plan, config.ntn_path, config.reminders_path);
-    if (!applied) {
-      std::println(stderr, "  apply failed: {}", applied.error());
-      any_failed = true;
-      continue;
-    }
-    state->pairs[key] = std::move(*applied);
-    state_dirty = true;
-  }
-
-  if (!dry_run && state_dirty) {
     auto saved = skadis::state::save(*state);
     if (!saved) {
-      std::println(stderr, "Failed to save state: {}", saved.error());
+      std::println(stderr, "  state save failed: {}", saved.error());
       any_failed = true;
     }
   }

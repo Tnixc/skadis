@@ -15,6 +15,8 @@ struct PlanContext {
   std::string notion_database_id;
   std::string data_source_id;
   std::string reminders_list_name;
+  std::string notion_done_status_name;
+  std::string notion_not_done_status_name;
 };
 
 struct Op {
@@ -40,10 +42,38 @@ struct PairPlan {
   std::vector<Op> ops;
 };
 
-inline PairPlan
+inline std::expected<void, std::string>
+validate_existing_links(std::span<const state::Link> links) {
+  std::map<std::string, std::string> notion_to_reminders;
+  std::map<std::string, std::string> reminders_to_notion;
+
+  for (const auto &link : links) {
+    auto [notion_it, notion_inserted] = notion_to_reminders.emplace(
+        link.notion_page_id, link.reminders_external_id);
+    if (!notion_inserted && notion_it->second != link.reminders_external_id) {
+      return std::unexpected("Conflicting state links for Notion page `" +
+                             link.notion_page_id + "`");
+    }
+
+    auto [reminder_it, reminder_inserted] = reminders_to_notion.emplace(
+        link.reminders_external_id, link.notion_page_id);
+    if (!reminder_inserted && reminder_it->second != link.notion_page_id) {
+      return std::unexpected("Conflicting state links for reminder `" +
+                             link.reminders_external_id + "`");
+    }
+  }
+
+  return {};
+}
+
+inline std::expected<PairPlan, std::string>
 plan_pair(const PlanContext &ctx, const state::PairState &existing,
           std::span<const notion::PageRecord> notion_items,
           std::span<const reminders::ReminderRecord> reminders_items) {
+  if (auto links_ok = validate_existing_links(existing.links); !links_ok) {
+    return std::unexpected(links_ok.error());
+  }
+
   PairPlan plan;
   plan.ctx = ctx;
 
@@ -92,15 +122,20 @@ plan_pair(const PlanContext &ctx, const state::PairState &existing,
   for (const auto &link : existing.links) {
     auto ni = notion_by_id.find(link.notion_page_id);
     auto ri = reminders_by_id.find(link.reminders_external_id);
-    if (ni != notion_by_id.end() && ri != reminders_by_id.end()) {
-      record_match(*ni->second, *ri->second);
-      matched_notion_ids.insert(link.notion_page_id);
-      matched_reminders_ids.insert(link.reminders_external_id);
+    if (ni == notion_by_id.end() || ri == reminders_by_id.end()) {
+      continue;
     }
+    if (matched_notion_ids.contains(link.notion_page_id) ||
+        matched_reminders_ids.contains(link.reminders_external_id)) {
+      continue;
+    }
+
+    record_match(*ni->second, *ri->second);
+    matched_notion_ids.insert(link.notion_page_id);
+    matched_reminders_ids.insert(link.reminders_external_id);
   }
 
-  std::map<std::string, std::vector<const notion::PageRecord *>>
-      notion_by_title;
+  std::map<std::string, std::vector<const notion::PageRecord *>> notion_by_title;
   for (const auto &r : notion_items) {
     if (!matched_notion_ids.contains(r.id)) {
       notion_by_title[r.item.title].push_back(&r);
@@ -201,7 +236,8 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
     }
     case Op::Kind::CreateNotionPage: {
       std::optional<std::string> status =
-          op.desired.done ? "Done" : "Not started";
+          op.desired.done ? plan.ctx.notion_done_status_name
+                          : plan.ctx.notion_not_done_status_name;
       auto pid = notion::create_page(ntn_path, plan.ctx.data_source_id,
                                      op.desired.title, op.desired.notes,
                                      op.desired.due_iso, status);
@@ -235,6 +271,18 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
         if (op.current.notes != op.desired.notes) {
           notes_arg = op.desired.notes;
         }
+
+        bool temporarily_uncompleted = false;
+        if ((title_arg || notes_arg) && op.current.done) {
+          auto e = reminders::uncomplete(reminders_path,
+                                         plan.ctx.reminders_list_name,
+                                         op.target_id);
+          if (!e) {
+            return std::unexpected("pre-edit uncomplete failed: " + e.error());
+          }
+          temporarily_uncompleted = true;
+        }
+
         if (title_arg || notes_arg) {
           auto e = reminders::edit(reminders_path, plan.ctx.reminders_list_name,
                                    op.target_id, title_arg, notes_arg);
@@ -242,7 +290,17 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
             return std::unexpected("edit reminder failed: " + e.error());
           }
         }
-        if (op.current.done != op.desired.done) {
+
+        if (temporarily_uncompleted) {
+          if (op.desired.done) {
+            auto e = reminders::complete(reminders_path,
+                                         plan.ctx.reminders_list_name,
+                                         op.target_id);
+            if (!e) {
+              return std::unexpected("post-edit complete failed: " + e.error());
+            }
+          }
+        } else if (op.current.done != op.desired.done) {
           auto e = op.desired.done
                        ? reminders::complete(reminders_path,
                                              plan.ctx.reminders_list_name,
@@ -279,16 +337,15 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
           is_done_status(*op.current_notion_extras.raw_status);
       if (op.desired.done) {
         if (!notion_is_done) {
-          fields.status_name = "Done";
+          fields.status_name = plan.ctx.notion_done_status_name;
         }
       } else {
         if (notion_is_done) {
-          fields.status_name = "Not started";
+          fields.status_name = plan.ctx.notion_not_done_status_name;
         }
       }
 
-      auto e =
-          notion::update_page(ntn_path, op.target_id, fields, body_arg);
+      auto e = notion::update_page(ntn_path, op.target_id, fields, body_arg);
       if (!e) {
         return std::unexpected("update page failed: " + e.error());
       }

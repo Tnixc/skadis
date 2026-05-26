@@ -1,10 +1,12 @@
+#include <algorithm>
+#include <cctype>
 #include <expected>
 #include <filesystem>
 #include <json_struct/json_struct.h>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,6 +16,11 @@ struct PageRecord {
   std::string id;
   Item item;
   NotionExtras extras;
+};
+
+struct SchemaInfo {
+  std::string done_status_name;
+  std::string not_done_status_name;
 };
 
 namespace raw {
@@ -96,14 +103,35 @@ struct PageWithIdOnly {
 };
 
 struct PageCreateResponse {
-  std::string id;
-  std::shared_ptr<PageWithIdOnly> page;
+  std::optional<std::string> id;
+  std::optional<PageWithIdOnly> page;
   JS_OBJECT(JS_MEMBER(id), JS_MEMBER(page));
 };
 
 struct DatabaseResponse {
   std::vector<TitleText> title;
   JS_OBJECT(JS_MEMBER(title));
+};
+
+struct StatusOption {
+  std::string name;
+  JS_OBJECT(JS_MEMBER(name));
+};
+
+struct StatusSchema {
+  std::vector<StatusOption> options;
+  JS_OBJECT(JS_MEMBER(options));
+};
+
+struct DataSourceProperty {
+  std::string type;
+  std::optional<StatusSchema> status;
+  JS_OBJECT(JS_MEMBER(type), JS_MEMBER(status));
+};
+
+struct DataSourceResponse {
+  std::map<std::string, DataSourceProperty> properties;
+  JS_OBJECT(JS_MEMBER(properties));
 };
 
 template <typename T>
@@ -114,6 +142,8 @@ inline std::expected<T, std::string> parse_json(const std::string &input) {
   ctx.tokenizer.allowComments(true);
   ctx.tokenizer.allowNewLineAsTokenDelimiter(true);
   ctx.tokenizer.allowSuperfluousComma(true);
+  ctx.allow_missing_members = true;
+  ctx.allow_unasigned_required_members = false;
   if (ctx.parseTo(out) != JS::Error::NoError) {
     return std::unexpected(ctx.makeErrorString());
   }
@@ -122,45 +152,90 @@ inline std::expected<T, std::string> parse_json(const std::string &input) {
 
 } // namespace raw
 
-inline std::string json_escape_string(std::string_view s) {
-  std::string out;
-  out.reserve(s.size() + 2);
-  out.push_back('"');
-  for (unsigned char c : s) {
-    switch (c) {
-    case '"':
-      out += "\\\"";
-      break;
-    case '\\':
-      out += "\\\\";
-      break;
-    case '\b':
-      out += "\\b";
-      break;
-    case '\f':
-      out += "\\f";
-      break;
-    case '\n':
-      out += "\\n";
-      break;
-    case '\r':
-      out += "\\r";
-      break;
-    case '\t':
-      out += "\\t";
-      break;
-    default:
-      if (c < 0x20) {
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-        out += buf;
-      } else {
-        out.push_back(static_cast<char>(c));
+namespace request {
+
+struct TextContent {
+  std::string content;
+  JS_OBJECT(JS_MEMBER(content));
+};
+
+struct TextValue {
+  TextContent text;
+  JS_OBJECT(JS_MEMBER(text));
+};
+
+struct TitleProperty {
+  std::vector<TextValue> title;
+  JS_OBJECT(JS_MEMBER(title));
+};
+
+struct DateValue {
+  std::string start;
+  JS_OBJECT(JS_MEMBER(start));
+};
+
+struct DateProperty {
+  std::shared_ptr<DateValue> date;
+  JS_OBJECT(JS_MEMBER(date));
+};
+
+struct StatusValue {
+  std::string name;
+  JS_OBJECT(JS_MEMBER(name));
+};
+
+struct StatusProperty {
+  StatusValue status;
+  JS_OBJECT(JS_MEMBER(status));
+};
+
+struct PageProperties {
+  std::optional<TitleProperty> name_prop;
+  std::optional<DateProperty> due_date_prop;
+  std::optional<StatusProperty> status_prop;
+  JS_OBJECT(JS_MEMBER_WITH_NAME(name_prop, "Name"),
+            JS_MEMBER_WITH_NAME(due_date_prop, "Due Date"),
+            JS_MEMBER_WITH_NAME(status_prop, "Status"));
+};
+
+struct Parent {
+  std::string data_source_id;
+  JS_OBJECT(JS_MEMBER(data_source_id));
+};
+
+struct PageCreateRequest {
+  Parent parent;
+  PageProperties properties;
+  JS_OBJECT(JS_MEMBER(parent), JS_MEMBER(properties));
+};
+
+struct PageUpdateRequest {
+  PageProperties properties;
+  JS_OBJECT(JS_MEMBER(properties));
+};
+
+} // namespace request
+
+inline std::string ascii_lower(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char character) {
+                   return static_cast<char>(std::tolower(character));
+                 });
+  return value;
+}
+
+inline std::optional<std::string>
+find_status_option_case_insensitive(const std::vector<raw::StatusOption> &options,
+                                    const std::vector<std::string> &candidates) {
+  for (const auto &candidate : candidates) {
+    const auto needle = ascii_lower(candidate);
+    for (const auto &option : options) {
+      if (ascii_lower(option.name) == needle) {
+        return option.name;
       }
     }
   }
-  out.push_back('"');
-  return out;
+  return std::nullopt;
 }
 
 struct PropertyFields {
@@ -174,38 +249,22 @@ struct PropertyFields {
   }
 };
 
-inline std::string build_properties_json(const PropertyFields &fields) {
-  std::string out = "{";
-  bool first = true;
-  auto comma = [&]() {
-    if (!first) {
-      out += ',';
-    }
-    first = false;
-  };
+inline request::PageProperties build_properties(const PropertyFields &fields) {
+  request::PageProperties properties;
   if (fields.title) {
-    comma();
-    out += "\"Name\":{\"title\":[{\"text\":{\"content\":";
-    out += json_escape_string(*fields.title);
-    out += "}}]}";
+    properties.name_prop = request::TitleProperty{{request::TextValue{{*fields.title}}}};
   }
   if (fields.due_iso) {
-    comma();
-    out += "\"Due Date\":{\"date\":{\"start\":";
-    out += json_escape_string(*fields.due_iso);
-    out += "}}";
+    properties.due_date_prop =
+        request::DateProperty{std::make_shared<request::DateValue>(
+            request::DateValue{*fields.due_iso})};
   } else if (fields.clear_due_date) {
-    comma();
-    out += "\"Due Date\":{\"date\":null}";
+    properties.due_date_prop = request::DateProperty{nullptr};
   }
   if (fields.status_name) {
-    comma();
-    out += "\"Status\":{\"status\":{\"name\":";
-    out += json_escape_string(*fields.status_name);
-    out += "}}";
+    properties.status_prop = request::StatusProperty{{*fields.status_name}};
   }
-  out += '}';
-  return out;
+  return properties;
 }
 
 inline std::expected<std::string, std::string>
@@ -251,6 +310,83 @@ resolve_data_source(const std::filesystem::path &ntn_path,
   return parsed->data_sources.front().id;
 }
 
+inline std::expected<SchemaInfo, std::string>
+load_schema(const std::filesystem::path &ntn_path,
+            const std::string &data_source_id) {
+  auto out = process::run_capture_stdout(
+      {ntn_path.string(), "api", "v1/data_sources/" + data_source_id});
+  if (!out) {
+    return std::unexpected(out.error());
+  }
+
+  auto parsed = raw::parse_json<raw::DataSourceResponse>(*out);
+  if (!parsed) {
+    return std::unexpected("Failed to parse `ntn api v1/data_sources` JSON: " +
+                           parsed.error());
+  }
+
+  const auto require_property_type =
+      [&](const std::string &property_name,
+          const std::string &expected_type)
+      -> std::expected<const raw::DataSourceProperty *, std::string> {
+    const auto it = parsed->properties.find(property_name);
+    if (it == parsed->properties.end()) {
+      return std::unexpected("Data source " + data_source_id +
+                             " is missing required property `" + property_name +
+                             "`");
+    }
+    if (it->second.type != expected_type) {
+      return std::unexpected("Data source " + data_source_id +
+                             " property `" + property_name + "` has type `" +
+                             it->second.type + "`, expected `" + expected_type +
+                             "`");
+    }
+    return &it->second;
+  };
+
+  auto name_prop = require_property_type("Name", "title");
+  if (!name_prop) {
+    return std::unexpected(name_prop.error());
+  }
+
+  auto due_date_prop = require_property_type("Due Date", "date");
+  if (!due_date_prop) {
+    return std::unexpected(due_date_prop.error());
+  }
+
+  auto status_prop = require_property_type("Status", "status");
+  if (!status_prop) {
+    return std::unexpected(status_prop.error());
+  }
+  if (!(*status_prop)->status) {
+    return std::unexpected("Data source " + data_source_id +
+                           " property `Status` is missing its status schema");
+  }
+
+  auto not_done_status_name = find_status_option_case_insensitive(
+      (*status_prop)->status->options, {"Not started"});
+  if (!not_done_status_name) {
+    return std::unexpected(
+        "Data source " + data_source_id +
+        " property `Status` needs an option matching `Not started`"
+        " (case-insensitive)");
+  }
+
+  auto done_status_name = find_status_option_case_insensitive(
+      (*status_prop)->status->options, {"Done", "Completed"});
+  if (!done_status_name) {
+    return std::unexpected(
+        "Data source " + data_source_id +
+        " property `Status` needs an option matching `Done` or `Completed`"
+        " (case-insensitive)");
+  }
+
+  return SchemaInfo{
+      .done_status_name = *done_status_name,
+      .not_done_status_name = *not_done_status_name,
+  };
+}
+
 inline std::expected<std::string, std::string>
 get_body(const std::filesystem::path &ntn_path, const std::string &page_id) {
   auto out = process::run_capture_stdout(
@@ -277,8 +413,7 @@ query_pages(const std::filesystem::path &ntn_path,
                                      data_source_id,    "--limit",     "100",
                                      "--json"};
     if (cursor) {
-      argv.push_back("--start-cursor");
-      argv.push_back(*cursor);
+      argv.push_back("--start-cursor=" + *cursor);
     }
     auto out = process::run_capture_stdout(argv);
     if (!out) {
@@ -357,14 +492,14 @@ create_page(const std::filesystem::path &ntn_path,
       .due_iso = std::move(due_iso),
       .status_name = std::move(status_name),
   };
-  std::string request_body = "{\"parent\":{\"data_source_id\":";
-  request_body += json_escape_string(parent_data_source_id);
-  request_body += "},\"properties\":";
-  request_body += build_properties_json(fields);
-  request_body += "}";
+  std::string request_body =
+      JS::serializeStruct(request::PageCreateRequest{
+          .parent = request::Parent{.data_source_id = parent_data_source_id},
+          .properties = build_properties(fields),
+      });
 
   auto out = process::run_capture_stdout(
-      {ntn_path.string(), "api", "v1/pages", "-d", request_body});
+      {ntn_path.string(), "api", "v1/pages"}, std::string_view(request_body));
   if (!out) {
     return std::unexpected(out.error());
   }
@@ -377,8 +512,8 @@ create_page(const std::filesystem::path &ntn_path,
   std::string page_id;
   if (parsed->page && !parsed->page->id.empty()) {
     page_id = parsed->page->id;
-  } else if (!parsed->id.empty()) {
-    page_id = parsed->id;
+  } else if (parsed->id && !parsed->id->empty()) {
+    page_id = *parsed->id;
   } else {
     return std::unexpected(
         "Could not find created page id in `ntn api v1/pages` response: " +
@@ -401,12 +536,13 @@ update_page(const std::filesystem::path &ntn_path, const std::string &page_id,
             const PropertyFields &fields,
             const std::optional<std::string> &body) {
   if (!fields.empty()) {
-    std::string request_body = "{\"properties\":";
-    request_body += build_properties_json(fields);
-    request_body += "}";
+    std::string request_body =
+        JS::serializeStruct(request::PageUpdateRequest{
+            .properties = build_properties(fields),
+        });
     auto out = process::run_capture_stdout(
-        {ntn_path.string(), "api", "v1/pages/" + page_id, "-X", "PATCH", "-d",
-         request_body});
+        {ntn_path.string(), "api", "v1/pages/" + page_id, "-X", "PATCH"},
+        std::string_view(request_body));
     if (!out) {
       return std::unexpected(out.error());
     }

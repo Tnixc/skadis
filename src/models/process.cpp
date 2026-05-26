@@ -1,6 +1,7 @@
 #include <cerrno>
 #include <cstring>
 #include <expected>
+#include <fcntl.h>
 #include <optional>
 #include <poll.h>
 #include <spawn.h>
@@ -36,6 +37,19 @@ run_capture(const std::vector<std::string> &argv,
       ::close(fd);
       fd = -1;
     }
+  };
+
+  auto set_nonblocking = [&](int fd) -> std::expected<void, std::string> {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+      return std::unexpected(std::string("fcntl(F_GETFL) failed: ") +
+                             std::strerror(errno));
+    }
+    if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      return std::unexpected(std::string("fcntl(F_SETFL) failed: ") +
+                             std::strerror(errno));
+    }
+    return {};
   };
 
   if (::pipe(stdin_pipe) < 0) {
@@ -95,52 +109,148 @@ run_capture(const std::vector<std::string> &argv,
                            ": " + std::strerror(spawn_err));
   }
 
-  if (stdin_data && !stdin_data->empty()) {
-    const char *data = stdin_data->data();
-    size_t remaining = stdin_data->size();
-    while (remaining > 0) {
-      ssize_t written = ::write(stdin_pipe[1], data, remaining);
-      if (written < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        break;
-      }
-      data += written;
-      remaining -= static_cast<size_t>(written);
+  if (auto result = set_nonblocking(stdin_pipe[1]); !result) {
+    close_fd(stdin_pipe[1]);
+    close_fd(stdout_pipe[0]);
+    close_fd(stderr_pipe[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
     }
+    return std::unexpected(result.error());
   }
-  close_fd(stdin_pipe[1]);
+  if (auto result = set_nonblocking(stdout_pipe[0]); !result) {
+    close_fd(stdin_pipe[1]);
+    close_fd(stdout_pipe[0]);
+    close_fd(stderr_pipe[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    return std::unexpected(result.error());
+  }
+  if (auto result = set_nonblocking(stderr_pipe[0]); !result) {
+    close_fd(stdin_pipe[1]);
+    close_fd(stdout_pipe[0]);
+    close_fd(stderr_pipe[0]);
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    return std::unexpected(result.error());
+  }
+
+  const std::string_view input = stdin_data ? *stdin_data : std::string_view();
+  size_t input_offset = 0;
+  if (input.empty()) {
+    close_fd(stdin_pipe[1]);
+  }
 
   std::string out;
   std::string err;
-  pollfd fds[2] = {{stdout_pipe[0], POLLIN, 0}, {stderr_pipe[0], POLLIN, 0}};
-  int open_count = 2;
-  while (open_count > 0) {
-    int r = ::poll(fds, 2, -1);
+  std::optional<std::string> runtime_error;
+
+  auto drain_fd = [&](int &fd, std::string &buffer) {
+    while (fd >= 0) {
+      char buf[4096];
+      ssize_t n = ::read(fd, buf, sizeof(buf));
+      if (n > 0) {
+        buffer.append(buf, static_cast<size_t>(n));
+        continue;
+      }
+      if (n == 0) {
+        close_fd(fd);
+        break;
+      }
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break;
+      }
+      runtime_error = std::string("read failed: ") + std::strerror(errno);
+      close_fd(fd);
+      break;
+    }
+  };
+
+  auto write_stdin = [&]() {
+    while (stdin_pipe[1] >= 0 && input_offset < input.size()) {
+      const size_t remaining = input.size() - input_offset;
+      const size_t chunk = remaining > 65536 ? 65536 : remaining;
+      ssize_t written =
+          ::write(stdin_pipe[1], input.data() + input_offset, chunk);
+      if (written > 0) {
+        input_offset += static_cast<size_t>(written);
+        continue;
+      }
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        break;
+      }
+      if (written < 0 && errno == EPIPE) {
+        close_fd(stdin_pipe[1]);
+        return;
+      }
+      runtime_error = std::string("write failed: ") + std::strerror(errno);
+      close_fd(stdin_pipe[1]);
+      return;
+    }
+
+    if (stdin_pipe[1] >= 0 && input_offset == input.size()) {
+      close_fd(stdin_pipe[1]);
+    }
+  };
+
+  while (stdin_pipe[1] >= 0 || stdout_pipe[0] >= 0 || stderr_pipe[0] >= 0) {
+    std::vector<pollfd> fds;
+    if (stdin_pipe[1] >= 0) {
+      fds.push_back({stdin_pipe[1], POLLOUT | POLLHUP | POLLERR, 0});
+    }
+    if (stdout_pipe[0] >= 0) {
+      fds.push_back({stdout_pipe[0], POLLIN | POLLHUP | POLLERR, 0});
+    }
+    if (stderr_pipe[0] >= 0) {
+      fds.push_back({stderr_pipe[0], POLLIN | POLLHUP | POLLERR, 0});
+    }
+
+    int r = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), -1);
     if (r < 0) {
       if (errno == EINTR) {
         continue;
       }
+      runtime_error = std::string("poll failed: ") + std::strerror(errno);
       break;
     }
-    for (int i = 0; i < 2; ++i) {
-      if (fds[i].fd < 0) {
-        continue;
+
+    size_t index = 0;
+    if (stdin_pipe[1] >= 0) {
+      const short events = fds[index++].revents;
+      if (events & POLLOUT) {
+        write_stdin();
       }
-      if (fds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
-        char buf[4096];
-        ssize_t n = ::read(fds[i].fd, buf, sizeof(buf));
-        if (n > 0) {
-          (i == 0 ? out : err).append(buf, static_cast<size_t>(n));
-        } else if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) {
-          ::close(fds[i].fd);
-          fds[i].fd = -1;
-          --open_count;
-        }
+      if (stdin_pipe[1] >= 0 && (events & (POLLHUP | POLLERR))) {
+        close_fd(stdin_pipe[1]);
       }
     }
+    if (stdout_pipe[0] >= 0) {
+      const short events = fds[index++].revents;
+      if (events & (POLLIN | POLLHUP | POLLERR)) {
+        drain_fd(stdout_pipe[0], out);
+      }
+    }
+    if (stderr_pipe[0] >= 0) {
+      const short events = fds[index++].revents;
+      if (events & (POLLIN | POLLHUP | POLLERR)) {
+        drain_fd(stderr_pipe[0], err);
+      }
+    }
+
+    if (runtime_error) {
+      break;
+    }
   }
+
+  close_fd(stdin_pipe[1]);
   close_fd(stdout_pipe[0]);
   close_fd(stderr_pipe[0]);
 
@@ -149,6 +259,10 @@ run_capture(const std::vector<std::string> &argv,
     if (errno != EINTR) {
       break;
     }
+  }
+
+  if (runtime_error) {
+    return std::unexpected(*runtime_error);
   }
 
   int exit_code = WIFEXITED(status)     ? WEXITSTATUS(status)
