@@ -16,6 +16,10 @@ struct NotionExtras {
   std::optional<std::string> raw_status;
 };
 
+inline bool is_done_status(const std::string &name) {
+  return name == "Done" || name == "Completed";
+}
+
 inline std::optional<std::string> normalize_iso_utc(const std::string &iso) {
   if (iso.empty()) {
     return std::nullopt;
@@ -114,8 +118,8 @@ inline bool items_equal_for_truth(const Item &truth, const Item &other,
   }
 
   if (truth_source == Source::Reminders) {
-    const bool notion_is_done =
-        notion_side.raw_status.has_value() && *notion_side.raw_status == "Done";
+    const bool notion_is_done = notion_side.raw_status.has_value() &&
+                                is_done_status(*notion_side.raw_status);
     if (truth.done) {
       if (!notion_is_done) {
         return false;

@@ -200,10 +200,8 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
       break;
     }
     case Op::Kind::CreateNotionPage: {
-      std::optional<std::string> status;
-      if (op.desired.done) {
-        status = "Done";
-      }
+      std::optional<std::string> status =
+          op.desired.done ? "Done" : "Not started";
       auto pid = notion::create_page(ntn_path, plan.ctx.data_source_id,
                                      op.desired.title, op.desired.notes,
                                      op.desired.due_iso, status);
@@ -260,35 +258,37 @@ apply_plan(const PairPlan &plan, const std::filesystem::path &ntn_path,
       break;
     }
     case Op::Kind::UpdateNotionPage: {
-      std::optional<std::string> title_arg;
+      notion::PropertyFields fields;
       std::optional<std::string> body_arg;
-      std::optional<std::string> due_arg;
-      std::optional<std::string> status_arg;
 
       if (op.current.title != op.desired.title) {
-        title_arg = op.desired.title;
+        fields.title = op.desired.title;
       }
       if (op.current.notes != op.desired.notes) {
         body_arg = op.desired.notes;
       }
-      if (op.current.due_iso != op.desired.due_iso && op.desired.due_iso) {
-        due_arg = *op.desired.due_iso;
+      if (op.current.due_iso != op.desired.due_iso) {
+        if (op.desired.due_iso) {
+          fields.due_iso = *op.desired.due_iso;
+        } else {
+          fields.clear_due_date = true;
+        }
       }
       const bool notion_is_done =
           op.current_notion_extras.raw_status.has_value() &&
-          *op.current_notion_extras.raw_status == "Done";
+          is_done_status(*op.current_notion_extras.raw_status);
       if (op.desired.done) {
         if (!notion_is_done) {
-          status_arg = "Done";
+          fields.status_name = "Done";
         }
       } else {
         if (notion_is_done) {
-          status_arg = "Not started";
+          fields.status_name = "Not started";
         }
       }
 
-      auto e = notion::update_page(ntn_path, op.target_id, title_arg, body_arg,
-                                   due_arg, status_arg);
+      auto e =
+          notion::update_page(ntn_path, op.target_id, fields, body_arg);
       if (!e) {
         return std::unexpected("update page failed: " + e.error());
       }

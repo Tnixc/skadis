@@ -122,53 +122,89 @@ inline std::expected<T, std::string> parse_json(const std::string &input) {
 
 } // namespace raw
 
-inline std::string yaml_single_quote(std::string_view s) {
+inline std::string json_escape_string(std::string_view s) {
   std::string out;
   out.reserve(s.size() + 2);
-  out.push_back('\'');
-  for (char c : s) {
-    if (c == '\'') {
-      out.push_back('\'');
+  out.push_back('"');
+  for (unsigned char c : s) {
+    switch (c) {
+    case '"':
+      out += "\\\"";
+      break;
+    case '\\':
+      out += "\\\\";
+      break;
+    case '\b':
+      out += "\\b";
+      break;
+    case '\f':
+      out += "\\f";
+      break;
+    case '\n':
+      out += "\\n";
+      break;
+    case '\r':
+      out += "\\r";
+      break;
+    case '\t':
+      out += "\\t";
+      break;
+    default:
+      if (c < 0x20) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+        out += buf;
+      } else {
+        out.push_back(static_cast<char>(c));
+      }
     }
-    out.push_back(c);
   }
-  out.push_back('\'');
+  out.push_back('"');
   return out;
 }
 
-struct FrontmatterFields {
+struct PropertyFields {
   std::optional<std::string> title;
   std::optional<std::string> due_iso;
+  bool clear_due_date{false};
   std::optional<std::string> status_name;
+
+  bool empty() const {
+    return !title && !due_iso && !clear_due_date && !status_name;
+  }
 };
 
-inline std::string build_content(const FrontmatterFields &fields,
-                                 std::optional<std::string_view> body) {
-  std::string out;
-  const bool any = fields.title.has_value() || fields.due_iso.has_value() ||
-                   fields.status_name.has_value();
-  if (any) {
-    out += "---\n";
-    if (fields.title) {
-      out += "Name: ";
-      out += yaml_single_quote(*fields.title);
-      out += '\n';
+inline std::string build_properties_json(const PropertyFields &fields) {
+  std::string out = "{";
+  bool first = true;
+  auto comma = [&]() {
+    if (!first) {
+      out += ',';
     }
-    if (fields.due_iso) {
-      out += "Due Date:\n  start: ";
-      out += yaml_single_quote(*fields.due_iso);
-      out += '\n';
-    }
-    if (fields.status_name) {
-      out += "Status: ";
-      out += yaml_single_quote(*fields.status_name);
-      out += '\n';
-    }
-    out += "---\n\n";
+    first = false;
+  };
+  if (fields.title) {
+    comma();
+    out += "\"Name\":{\"title\":[{\"text\":{\"content\":";
+    out += json_escape_string(*fields.title);
+    out += "}}]}";
   }
-  if (body) {
-    out += *body;
+  if (fields.due_iso) {
+    comma();
+    out += "\"Due Date\":{\"date\":{\"start\":";
+    out += json_escape_string(*fields.due_iso);
+    out += "}}";
+  } else if (fields.clear_due_date) {
+    comma();
+    out += "\"Due Date\":{\"date\":null}";
   }
+  if (fields.status_name) {
+    comma();
+    out += "\"Status\":{\"status\":{\"name\":";
+    out += json_escape_string(*fields.status_name);
+    out += "}}";
+  }
+  out += '}';
   return out;
 }
 
@@ -271,7 +307,8 @@ query_pages(const std::filesystem::path &ntn_path,
 
       if (page.properties.status_prop.status) {
         record.extras.raw_status = page.properties.status_prop.status->name;
-        record.item.done = page.properties.status_prop.status->name == "Done";
+        record.item.done =
+            is_done_status(page.properties.status_prop.status->name);
       } else {
         record.item.done = false;
       }
@@ -297,66 +334,91 @@ query_pages(const std::filesystem::path &ntn_path,
   return records;
 }
 
+inline std::expected<void, std::string>
+write_body(const std::filesystem::path &ntn_path, const std::string &page_id,
+           const std::string &body) {
+  auto out = process::run_capture_stdout(
+      {ntn_path.string(), "pages", "update", page_id,
+       "--allow-deleting-content"},
+      std::string_view(body));
+  if (!out) {
+    return std::unexpected(out.error());
+  }
+  return {};
+}
+
 inline std::expected<std::string, std::string>
 create_page(const std::filesystem::path &ntn_path,
             const std::string &parent_data_source_id, const std::string &title,
             const std::string &body, std::optional<std::string> due_iso,
             std::optional<std::string> status_name) {
-  FrontmatterFields fields{
+  PropertyFields fields{
       .title = title,
       .due_iso = std::move(due_iso),
       .status_name = std::move(status_name),
   };
-  std::string content = build_content(fields, body);
+  std::string request_body = "{\"parent\":{\"data_source_id\":";
+  request_body += json_escape_string(parent_data_source_id);
+  request_body += "},\"properties\":";
+  request_body += build_properties_json(fields);
+  request_body += "}";
 
   auto out = process::run_capture_stdout(
-      {ntn_path.string(), "pages", "create", "--parent",
-       "data-source:" + parent_data_source_id, "--json"},
-      std::string_view(content));
+      {ntn_path.string(), "api", "v1/pages", "-d", request_body});
   if (!out) {
     return std::unexpected(out.error());
   }
 
   auto parsed = raw::parse_json<raw::PageCreateResponse>(*out);
   if (!parsed) {
-    return std::unexpected("Failed to parse `ntn pages create` JSON: " +
+    return std::unexpected("Failed to parse `ntn api v1/pages` create JSON: " +
                            parsed.error());
   }
+  std::string page_id;
   if (parsed->page && !parsed->page->id.empty()) {
-    return parsed->page->id;
+    page_id = parsed->page->id;
+  } else if (!parsed->id.empty()) {
+    page_id = parsed->id;
+  } else {
+    return std::unexpected(
+        "Could not find created page id in `ntn api v1/pages` response: " +
+        *out);
   }
-  if (!parsed->id.empty()) {
-    return parsed->id;
+
+  if (!body.empty()) {
+    auto wrote = write_body(ntn_path, page_id, body);
+    if (!wrote) {
+      return std::unexpected("Created page " + page_id +
+                             " but failed to write body: " + wrote.error());
+    }
   }
-  return std::unexpected(
-      "Could not find created page id in `ntn pages create` response: " + *out);
+
+  return page_id;
 }
 
 inline std::expected<void, std::string>
 update_page(const std::filesystem::path &ntn_path, const std::string &page_id,
-            std::optional<std::string> title, std::optional<std::string> body,
-            std::optional<std::string> due_iso,
-            std::optional<std::string> status_name) {
-  FrontmatterFields fields{
-      .title = std::move(title),
-      .due_iso = std::move(due_iso),
-      .status_name = std::move(status_name),
-  };
-  std::optional<std::string_view> body_view;
-  if (body) {
-    body_view = std::string_view(*body);
-  }
-  std::string content = build_content(fields, body_view);
-  if (content.empty()) {
-    return {};
+            const PropertyFields &fields,
+            const std::optional<std::string> &body) {
+  if (!fields.empty()) {
+    std::string request_body = "{\"properties\":";
+    request_body += build_properties_json(fields);
+    request_body += "}";
+    auto out = process::run_capture_stdout(
+        {ntn_path.string(), "api", "v1/pages/" + page_id, "-X", "PATCH", "-d",
+         request_body});
+    if (!out) {
+      return std::unexpected(out.error());
+    }
   }
 
-  auto out = process::run_capture_stdout(
-      {ntn_path.string(), "pages", "update", page_id, "--json"},
-      std::string_view(content));
-  if (!out) {
-    return std::unexpected(out.error());
+  if (body) {
+    auto wrote = write_body(ntn_path, page_id, *body);
+    if (!wrote) {
+      return std::unexpected(wrote.error());
+    }
   }
+
   return {};
 }
 
