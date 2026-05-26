@@ -8,7 +8,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
 namespace skadis {
 
 enum class Source { Notion, Reminders };
