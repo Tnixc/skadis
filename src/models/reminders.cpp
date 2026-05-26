@@ -11,6 +11,7 @@ namespace skadis::reminders {
 struct ReminderRecord {
   std::string external_id;
   Item item;
+  std::optional<std::string> recency_iso;
 };
 
 namespace raw {
@@ -20,9 +21,14 @@ struct Reminder {
   std::string title;
   std::shared_ptr<std::string> notes;
   std::shared_ptr<std::string> dueDate;
+  std::shared_ptr<std::string> creationDate;
+  std::shared_ptr<std::string> completionDate;
+  std::shared_ptr<std::string> lastModified;
   bool isCompleted{};
   JS_OBJECT(JS_MEMBER(externalId), JS_MEMBER(title), JS_MEMBER(notes),
-            JS_MEMBER(dueDate), JS_MEMBER(isCompleted));
+            JS_MEMBER(dueDate), JS_MEMBER(creationDate),
+            JS_MEMBER(completionDate), JS_MEMBER(lastModified),
+            JS_MEMBER(isCompleted));
 };
 
 struct AddedReminder {
@@ -105,6 +111,18 @@ list_items(const std::filesystem::path &reminders_path,
     rec.item.notes = r.notes ? std::move(*r.notes) : std::string();
     if (r.dueDate) {
       rec.item.due_iso = normalize_iso_utc(*r.dueDate);
+    }
+    if (r.creationDate) {
+      rec.recency_iso = more_recent_iso_timestamp(
+          rec.recency_iso, normalize_iso_utc(*r.creationDate));
+    }
+    if (r.completionDate) {
+      rec.recency_iso = more_recent_iso_timestamp(
+          rec.recency_iso, normalize_iso_utc(*r.completionDate));
+    }
+    if (r.lastModified) {
+      rec.recency_iso = more_recent_iso_timestamp(
+          rec.recency_iso, normalize_iso_utc(*r.lastModified));
     }
     rec.item.done = r.isCompleted;
     records.push_back(std::move(rec));

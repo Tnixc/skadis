@@ -16,6 +16,7 @@ struct PageRecord {
   std::string id;
   Item item;
   NotionExtras extras;
+  std::optional<std::string> recency_iso;
 };
 
 struct SchemaInfo {
@@ -76,8 +77,11 @@ struct PageProperties {
 
 struct Page {
   std::string id;
+  std::optional<std::string> created_time;
+  std::optional<std::string> last_edited_time;
   PageProperties properties;
-  JS_OBJECT(JS_MEMBER(id), JS_MEMBER(properties));
+  JS_OBJECT(JS_MEMBER(id), JS_MEMBER(created_time),
+            JS_MEMBER(last_edited_time), JS_MEMBER(properties));
 };
 
 struct QueryResponse {
@@ -428,6 +432,15 @@ query_pages(const std::filesystem::path &ntn_path,
     for (auto &page : parsed->results) {
       PageRecord record;
       record.id = std::move(page.id);
+      if (page.created_time) {
+        record.recency_iso =
+            more_recent_iso_timestamp(record.recency_iso,
+                                      normalize_iso_utc(*page.created_time));
+      }
+      if (page.last_edited_time) {
+        record.recency_iso = more_recent_iso_timestamp(
+            record.recency_iso, normalize_iso_utc(*page.last_edited_time));
+      }
 
       std::string title;
       for (const auto &chunk : page.properties.name_prop.title) {

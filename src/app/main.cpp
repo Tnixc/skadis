@@ -52,9 +52,10 @@ std::expected<CliArgs, std::string> parse_args(int argc, char **argv) {
 void print_help() {
   std::println("Usage: skadis [sync] [--dry-run]");
   std::println("");
-  std::println("Syncs each configured Notion <-> Reminders pair using the");
-  std::println("`source_of_truth` from ~/.config/skadis/config.json. With");
-  std::println("--dry-run, prints the plan without mutating either side.");
+  std::println("Syncs each configured Notion <-> Reminders pair by pushing");
+  std::println("the most recently modified matched item; `source_of_truth`");
+  std::println("from ~/.config/skadis/config.json is used as a tie-breaker.");
+  std::println("With --dry-run, prints the plan without mutating either side.");
 }
 
 int run_sync(const skadis::Config &config, bool dry_run) {

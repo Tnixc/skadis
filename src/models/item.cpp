@@ -171,6 +171,16 @@ parse_iso_utc_normalizable(std::string_view input) {
     return parts;
   }
 
+  if (input.size() == 24 && input[10] == 'T' && input[19] == '.' &&
+      input[23] == 'Z') {
+    auto milliseconds = parse_fixed_int(input, 20, 3);
+    if (!milliseconds || !parse_date(input.substr(0, 10), parts) ||
+        !parse_time(input.substr(11, 8), parts)) {
+      return std::nullopt;
+    }
+    return parts;
+  }
+
   if (input.size() == 25 && input[10] == 'T') {
     if (!parse_date(input.substr(0, 10), parts) ||
         !parse_time(input.substr(11, 8), parts) ||
@@ -232,9 +242,21 @@ inline std::optional<std::string> normalize_iso_utc(const std::string &iso) {
   return format_utc_iso(*parsed);
 }
 
-inline bool items_equal_for_truth(const Item &truth, const Item &other,
-                                  const NotionExtras &notion_side,
-                                  Source truth_source) {
+inline std::optional<std::string>
+more_recent_iso_timestamp(std::optional<std::string> left,
+                          std::optional<std::string> right) {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  return (*left >= *right) ? left : right;
+}
+
+inline bool items_equal_for_authority(const Item &truth, const Item &other,
+                                      const NotionExtras &notion_side,
+                                      Source truth_source) {
   if (truth.title != other.title) {
     return false;
   }

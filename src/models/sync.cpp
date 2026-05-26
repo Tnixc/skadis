@@ -66,6 +66,29 @@ validate_existing_links(std::span<const state::Link> links) {
   return {};
 }
 
+inline const char *source_name(Source source) {
+  return source == Source::Notion ? "Notion" : "Reminders";
+}
+
+inline Source authoritative_source_for_match(
+    const PlanContext &ctx, const notion::PageRecord &notion_record,
+    const reminders::ReminderRecord &reminder_record) {
+  if (notion_record.recency_iso && reminder_record.recency_iso) {
+    if (*notion_record.recency_iso > *reminder_record.recency_iso) {
+      return Source::Notion;
+    }
+    if (*notion_record.recency_iso < *reminder_record.recency_iso) {
+      return Source::Reminders;
+    }
+  } else if (notion_record.recency_iso) {
+    return Source::Notion;
+  } else if (reminder_record.recency_iso) {
+    return Source::Reminders;
+  }
+
+  return ctx.truth;
+}
+
 inline std::expected<PairPlan, std::string>
 plan_pair(const PlanContext &ctx, const state::PairState &existing,
           std::span<const notion::PageRecord> notion_items,
@@ -93,20 +116,26 @@ plan_pair(const PlanContext &ctx, const state::PairState &existing,
                           const reminders::ReminderRecord &r) {
     plan.matched_links.push_back({n.id, r.external_id});
 
-    const Item &truth = (ctx.truth == Source::Notion) ? n.item : r.item;
-    const Item &other = (ctx.truth == Source::Notion) ? r.item : n.item;
-    if (items_equal_for_truth(truth, other, n.extras, ctx.truth)) {
+    const Source authoritative_source =
+        authoritative_source_for_match(ctx, n, r);
+    const Item &truth =
+        (authoritative_source == Source::Notion) ? n.item : r.item;
+    const Item &other =
+        (authoritative_source == Source::Notion) ? r.item : n.item;
+    if (items_equal_for_authority(truth, other, n.extras,
+                                  authoritative_source)) {
       return;
     }
 
     Op op;
-    if (ctx.truth == Source::Notion) {
+    if (authoritative_source == Source::Notion) {
       op.kind = Op::Kind::UpdateReminder;
       op.source_id = n.id;
       op.target_id = r.external_id;
       op.desired = n.item;
       op.current = r.item;
-      op.description = "update reminder \"" + n.item.title + "\"";
+      op.description = "update reminder \"" + op.desired.title +
+                       "\" (from " + source_name(authoritative_source) + ")";
     } else {
       op.kind = Op::Kind::UpdateNotionPage;
       op.source_id = r.external_id;
@@ -114,7 +143,8 @@ plan_pair(const PlanContext &ctx, const state::PairState &existing,
       op.desired = r.item;
       op.current = n.item;
       op.current_notion_extras = n.extras;
-      op.description = "update page \"" + r.item.title + "\"";
+      op.description = "update page \"" + op.desired.title +
+                       "\" (from " + source_name(authoritative_source) + ")";
     }
     plan.ops.push_back(std::move(op));
   };
@@ -185,8 +215,9 @@ plan_pair(const PlanContext &ctx, const state::PairState &existing,
 inline std::string render_plan(const PairPlan &plan) {
   std::string out;
   out += "Pair: notion=" + plan.ctx.notion_database_id +
-         "  reminders=" + plan.ctx.reminders_list_name + "  (truth=";
-  out += (plan.ctx.truth == Source::Notion) ? "Notion" : "Reminders";
+         "  reminders=" + plan.ctx.reminders_list_name +
+         "  (matched=most-recent, tie-breaker=";
+  out += source_name(plan.ctx.truth);
   out += ")\n";
   out += "  matched: " + std::to_string(plan.matched_links.size()) +
          "  ops: " + std::to_string(plan.ops.size()) + "\n";

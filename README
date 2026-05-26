@@ -3,8 +3,9 @@ Built with craft: https://github.com/randerson112/craft, one unit
 ./build/skadis --help
 Usage: skadis [sync] [--dry-run]
 
-Syncs each configured Notion <-> Reminders pair using the
-`source_of_truth` from ~/.config/skadis/config.json. With
+Syncs each configured Notion <-> Reminders pair by pushing the
+most recently modified matched item; `source_of_truth` from
+~/.config/skadis/config.json is used as a tie-breaker. With
 --dry-run, prints the plan without mutating either side.
 
 
