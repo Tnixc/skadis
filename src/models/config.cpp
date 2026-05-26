@@ -1,34 +1,48 @@
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
+#include <fstream>
 #include <json_struct/json_struct.h>
 #include <string>
-#include <string_view>
+#include <utility>
 #include <vector>
-using namespace std;
+
+namespace skadis {
 
 enum class Source { Notion, Reminders };
 
 struct NotionId {
-  string value;
+  std::string value;
 };
 
 struct RemindersList {
-  string value;
+  std::string value;
 };
 
-using SyncPair = pair<NotionId, RemindersList>;
+using SyncPair = std::pair<NotionId, RemindersList>;
 
-string normalize_source_name(string value) {
-  transform(value.begin(), value.end(), value.begin(),
-            [](unsigned char character) {
-              return static_cast<char>(tolower(character));
-            });
+struct Config {
+  Source source{};
+  std::filesystem::path ntn_path;
+  std::vector<SyncPair> pairs;
+  std::filesystem::path reminders_path;
+
+  std::expected<void, std::string> validate() const;
+  static std::expected<Config, std::string> load();
+};
+
+inline std::string normalize_source_name(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char character) {
+                   return static_cast<char>(std::tolower(character));
+                 });
   return value;
 }
 
-expected<Source, string> parse_source(const string &raw_source) {
+inline std::expected<Source, std::string>
+parse_source(const std::string &raw_source) {
   const auto normalized = normalize_source_name(raw_source);
   if (normalized == "notion") {
     return Source::Notion;
@@ -38,12 +52,12 @@ expected<Source, string> parse_source(const string &raw_source) {
     return Source::Reminders;
   }
 
-  return unexpected("Unsupported source: " + raw_source);
+  return std::unexpected("Unsupported source: " + raw_source);
 }
 
 struct RawPair {
-  string notion_id;
-  string reminders_list;
+  std::string notion_id;
+  std::string reminders_list;
 
   JS_OBJECT(JS_MEMBER_WITH_NAME_AND_ALIASES(notion_id, "notion_id", "notion"),
             JS_MEMBER_WITH_NAME_AND_ALIASES(reminders_list, "reminders_list",
@@ -51,58 +65,25 @@ struct RawPair {
 };
 
 struct RawConfig {
-  string source;
-  string ntn_path;
-  string reminders_path;
-  vector<RawPair> pairs;
+  std::string source;
+  std::string ntn_path;
+  std::string reminders_path;
+  std::vector<RawPair> pairs;
 
   JS_OBJ(source, ntn_path, reminders_path, pairs);
 };
 
-struct Config {
-  Source source{};
-  filesystem::path ntn_path;
-  vector<SyncPair> pairs;
-  filesystem::path reminders_path;
-
-  expected<void, string> validate() const {
-    if (!filesystem::exists(ntn_path)) {
-      return unexpected("The provided path for `ntn` doesn't exist: " +
-                        ntn_path.generic_string());
-    }
-
-    if (!filesystem::exists(reminders_path)) {
-      return unexpected("The provided path for `reminders` doesn't exist: " +
-                        reminders_path.generic_string());
-    }
-
-    return {};
-  }
-
-  expected<Config, string> load() {
-
-    auto home = std::getenv("HOME");
-    auto config_path =
-        std::filesystem::path(home).append(".config").append("skadis").append(
-            "config.json");
-
-    if (!std::filesystem::exists(config_path)) {
-      return unexpected("The config file doesn't exist: " +
-                        config_path.generic_string());
-    }
-  }
-};
-
-expected<Config, string> to_config(const RawConfig &raw_config) {
+inline std::expected<Config, std::string>
+to_config(const RawConfig &raw_config) {
   const auto source = parse_source(raw_config.source);
   if (!source) {
-    return unexpected(source.error());
+    return std::unexpected(source.error());
   }
 
   Config config{
       .source = *source,
-      .ntn_path = filesystem::path(raw_config.ntn_path),
-      .reminders_path = filesystem::path(raw_config.reminders_path),
+      .ntn_path = std::filesystem::path(raw_config.ntn_path),
+      .reminders_path = std::filesystem::path(raw_config.reminders_path),
   };
 
   config.pairs.reserve(raw_config.pairs.size());
@@ -114,10 +95,10 @@ expected<Config, string> to_config(const RawConfig &raw_config) {
   return config;
 }
 
-expected<Config, string> deserialize_config(string_view raw_config) {
+inline std::expected<Config, std::string>
+deserialize_config(std::string raw_config) {
   RawConfig parsed_config;
-  string config_text(raw_config);
-  JS::ParseContext context(config_text);
+  JS::ParseContext context(raw_config);
 
   context.tokenizer.allowAsciiType(true);
   context.tokenizer.allowComments(true);
@@ -125,17 +106,53 @@ expected<Config, string> deserialize_config(string_view raw_config) {
   context.tokenizer.allowSuperfluousComma(true);
 
   if (context.parseTo(parsed_config) != JS::Error::NoError) {
-    return unexpected(context.makeErrorString());
+    return std::unexpected(context.makeErrorString());
   }
 
   auto config = to_config(parsed_config);
   if (!config) {
-    return unexpected(config.error());
+    return std::unexpected(config.error());
   }
 
   if (auto validation = config->validate(); !validation) {
-    return unexpected(validation.error());
+    return std::unexpected(validation.error());
   }
 
   return config;
 }
+
+inline std::expected<void, std::string> Config::validate() const {
+  if (!std::filesystem::exists(ntn_path)) {
+    return std::unexpected("The provided path for `ntn` doesn't exist: " +
+                           ntn_path.generic_string());
+  }
+
+  if (!std::filesystem::exists(reminders_path)) {
+    return std::unexpected(
+        "The provided path for `reminders` doesn't exist: " +
+        reminders_path.generic_string());
+  }
+
+  return {};
+}
+
+inline std::expected<Config, std::string> Config::load() {
+  const auto *home = std::getenv("HOME");
+  if (!home) {
+    return std::unexpected("HOME is not set");
+  }
+
+  const auto config_path = std::filesystem::path(home) / ".config" / "skadis" /
+                           "config.json";
+  if (!std::filesystem::exists(config_path)) {
+    return std::unexpected("The config file doesn't exist: " +
+                           config_path.generic_string());
+  }
+
+  std::ifstream file(config_path);
+  const auto config_str = std::string(std::istreambuf_iterator<char>(file),
+                                      std::istreambuf_iterator<char>());
+  return deserialize_config(config_str);
+}
+
+} // namespace skadis
