@@ -59,10 +59,10 @@ struct RawPair {
   std::string notion_id;
   std::string reminders_list;
 
-  JS_OBJECT(
-      JS_MEMBER_WITH_NAME_AND_ALIASES(notion_id, "notion_id", "notion"),
-      JS_MEMBER_WITH_NAME_AND_ALIASES(reminders_list, "reminders_list",
-                                      "reminders", "reminders_list_name"));
+  JS_OBJECT(JS_MEMBER_WITH_NAME_AND_ALIASES(notion_id, "notion_id", "notion"),
+            JS_MEMBER_WITH_NAME_AND_ALIASES(reminders_list, "reminders_list",
+                                            "reminders",
+                                            "reminders_list_name"));
 };
 
 struct RawConfig {
@@ -71,7 +71,8 @@ struct RawConfig {
   std::string reminders_path;
   std::vector<RawPair> pairs;
 
-  JS_OBJECT(JS_MEMBER_WITH_NAME_AND_ALIASES(source, "source", "source_of_truth"),
+  JS_OBJECT(JS_MEMBER_WITH_NAME_AND_ALIASES(source, "source",
+                                            "source_of_truth"),
             JS_MEMBER_WITH_NAME(ntn_path, "ntn_path"),
             JS_MEMBER_WITH_NAME(reminders_path, "reminders_path"),
             JS_MEMBER_WITH_NAME_AND_ALIASES(pairs, "pairs", "lists"));
@@ -132,9 +133,8 @@ inline std::expected<void, std::string> Config::validate() const {
   }
 
   if (!std::filesystem::exists(reminders_path)) {
-    return std::unexpected(
-        "The provided path for `reminders` doesn't exist: " +
-        reminders_path.generic_string());
+    return std::unexpected("The provided path for `reminders` doesn't exist: " +
+                           reminders_path.generic_string());
   }
 
   return {};
@@ -146,8 +146,8 @@ inline std::expected<Config, std::string> Config::load() {
     return std::unexpected("HOME is not set");
   }
 
-  const auto config_path = std::filesystem::path(home) / ".config" / "skadis" /
-                           "config.json";
+  const auto config_path =
+      std::filesystem::path(home) / ".config" / "skadis" / "config.json";
   if (!std::filesystem::exists(config_path)) {
     return std::unexpected("The config file doesn't exist: " +
                            config_path.generic_string());
